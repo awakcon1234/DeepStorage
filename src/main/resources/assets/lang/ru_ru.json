@@ -1,0 +1,30 @@
+{
+  "menu.deep_storage.items.alphabetical_sort": "Сортировка по Названию",
+  "menu.deep_storage.items.category.deep_storage": "Deep Storage",
+  "menu.deep_storage.items.security_card": "Карты Безопасности",
+  "menu.deep_storage.items.stack_sort": "Сортировка по Количеству",
+  "menu.deep_storage.items.storage_cell": "Диски хранилища",
+  "menu.deep_storage.items.whitelist_off": "Белый список : Выкл.",
+  "menu.deep_storage.items.whitelist_on": "Белый список : Вкл.",
+  "menu.deep_storage.security_card_inventory": "Карты безопасности",
+  "menu.deep_storage.storage_cell_inventory": "Диски хранилища",
+  
+  "item.deep_storage.cell_component_16k": "Ячейка памяти 16к",
+  "item.deep_storage.cell_component_1k": "Ячейка памяти 1к",
+  "item.deep_storage.cell_component_4k": "Ячейка памяти 4к",
+  "item.deep_storage.cell_component_64k": "Ячейка памяти 64к",
+  "item.deep_storage.empty_security_card": "Пустая Карта безопасности",
+  "item.deep_storage.empty_security_card.lore": "Shift-клик чтобы задать владельца",
+  "item.deep_storage.security_card": "Карта безопасности : %s",
+  "item.deep_storage.security_card.lore": "Shift-клик чтобы очистить",
+  "item.deep_storage.storage_cell.bytes": "%s из %s Байтов использовано",
+  "item.deep_storage.storage_cell.types": "%s из %s Типов использовано",
+  "item.deep_storage.storage_cell_16k": "Диск хранилища 16к",
+  "item.deep_storage.storage_cell_1k": "Диск хранилища 1к",
+  "item.deep_storage.storage_cell_4k": "Диск хранилища 4к",
+  "item.deep_storage.storage_cell_64k": "Диск хранилища 64к",
+  
+  "block.deep_storage.deep_storage_unit": "Хранилище Deep Storage",
+  
+  "message.deep_storage.not_whitelisted": "У вас нет доступа к этому хранилищу"
+}
