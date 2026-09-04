@@ -1,56 +1,35 @@
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
-
 group = "com.expectale"
-version = "2.0.0"
-
-val mojangMapped = project.hasProperty("mojang-mapped")
+version = "3.0.0"
 
 plugins {
     alias(libs.plugins.kotlin)
-    alias(libs.plugins.paperweight)
     alias(libs.plugins.nova)
 }
 
 repositories {
     mavenCentral()
-    maven("https://papermc.io/repo/repository/maven-public/")
+    maven("https://repo.papermc.io/repository/maven-public/")
     maven("https://repo.xenondevs.xyz/releases")
 }
 
 dependencies {
-    paperweight.paperDevBundle(libs.versions.paper)
     implementation(libs.nova)
-    compileOnly("xyz.xenondevs.nova:nova-api:0.16")
+    // the protection integration is declared against the public API module
+    compileOnly("xyz.xenondevs.nova:nova-api:${libs.versions.nova.get()}")
 }
 
 addon {
-    id.set("deep_storage")
-    name.set("Deep-Storage")
-    version.set(project.version.toString())
-    novaVersion.set(libs.versions.nova)
-    main.set("com.expectale.DeepStorage")
-    authors.add("CptBeffHeart")
-}
+    // The lowercase name is the addon id, so this has to stay "deep_storage":
+    // recipes, configs, lang keys and every unit already placed in a world use that namespace.
+    name = "Deep_Storage"
+    version = project.version.toString()
+    main = "com.expectale.DeepStorage"
+    authors = listOf("CptBeffHeart", "awakcon1234")
+    description = "Bulk item storage in cells, with security cards"
+    website = "https://github.com/awakcon1234/DeepStorage"
 
-tasks {
-    register<Copy>("addonJar") {
-        group = "build"
-        if (mojangMapped) {
-            dependsOn("jar")
-            from(File(buildDir, "libs/${project.name}-${project.version}-dev.jar"))
-        } else {
-            dependsOn("reobfJar")
-            from(File(buildDir, "libs/${project.name}-${project.version}.jar"))
-        }
-        
-        from(File(project.buildDir, "libs/${project.name}-${project.version}.jar"))
-        into((project.findProperty("outDir") as? String)?.let(::File) ?: project.buildDir)
-        rename { "${addonMetadata.get().addonName.get()}-${project.version}.jar" }
-    }
-    
-    withType<KotlinCompile> {
-        kotlinOptions {
-            jvmTarget = "17"
-        }
-    }
+    // output directory for the generated addon jar is read from the "outDir" project property (-PoutDir="...")
+    val outDir = project.findProperty("outDir")
+    if (outDir is String)
+        destination.set(File(outDir))
 }

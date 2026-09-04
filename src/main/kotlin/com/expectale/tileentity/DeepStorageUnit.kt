@@ -3,457 +3,529 @@ package com.expectale.tileentity
 import com.expectale.block.SecurityCardHolder
 import com.expectale.block.StorageCellHolder
 import com.expectale.registry.Blocks.DEEP_STORAGE_UNIT
-import com.expectale.registry.GuiMaterials
+import com.expectale.registry.GuiItems
+import com.expectale.registry.Items
+import com.expectale.storage_cell.CellData
 import com.expectale.storage_cell.StorageCell
+import com.expectale.storage_cell.VirtualStorageCell
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.GameMode
 import org.bukkit.entity.Player
 import org.bukkit.event.inventory.ClickType
-import org.bukkit.event.inventory.InventoryClickEvent
 import org.bukkit.inventory.ItemStack
-import xyz.xenondevs.invui.gui.AbstractScrollGui
+import xyz.xenondevs.cbf.Compound
+import xyz.xenondevs.invui.Click
 import xyz.xenondevs.invui.gui.Gui
-import xyz.xenondevs.invui.gui.SlotElement
-import xyz.xenondevs.invui.gui.structure.Structure
+import xyz.xenondevs.invui.gui.ScrollGui
 import xyz.xenondevs.invui.inventory.VirtualInventory
+import xyz.xenondevs.invui.inventory.event.ItemPostUpdateEvent
 import xyz.xenondevs.invui.inventory.event.ItemPreUpdateEvent
-import xyz.xenondevs.invui.inventory.event.PlayerUpdateReason
 import xyz.xenondevs.invui.inventory.event.UpdateReason
+import xyz.xenondevs.invui.item.AbstractItem
 import xyz.xenondevs.invui.item.Item
+import xyz.xenondevs.invui.item.ItemBuilder
 import xyz.xenondevs.invui.item.ItemProvider
-import xyz.xenondevs.invui.item.builder.ItemBuilder
-import xyz.xenondevs.invui.item.builder.setDisplayName
-import xyz.xenondevs.invui.item.impl.AbstractItem
 import xyz.xenondevs.invui.window.Window
-import xyz.xenondevs.invui.window.type.context.setTitle
-import xyz.xenondevs.nova.data.config.entry
-import xyz.xenondevs.nova.data.world.block.state.NovaTileEntityState
-import xyz.xenondevs.nova.item.DefaultGuiItems
-import xyz.xenondevs.nova.tileentity.NetworkedTileEntity
-import xyz.xenondevs.nova.tileentity.menu.TileEntityMenuClass
-import xyz.xenondevs.nova.tileentity.network.NetworkConnectionType
-import xyz.xenondevs.nova.tileentity.network.item.holder.NovaItemHolder
-import xyz.xenondevs.nova.tileentity.network.item.inventory.NetworkedInventory
-import xyz.xenondevs.nova.ui.addIngredient
-import xyz.xenondevs.nova.ui.config.side.OpenSideConfigItem
-import xyz.xenondevs.nova.ui.config.side.SideConfigMenu
-import xyz.xenondevs.nova.ui.item.BackItem
-import xyz.xenondevs.nova.ui.item.clickableItem
+import xyz.xenondevs.nova.config.entry
+import xyz.xenondevs.nova.ui.menu.item.BackItem
+import xyz.xenondevs.nova.ui.menu.sideconfig.OpenSideConfigItem
+import xyz.xenondevs.nova.ui.menu.sideconfig.SideConfigMenu
 import xyz.xenondevs.nova.util.BlockSide
-import xyz.xenondevs.nova.util.VoidingVirtualInventory
 import xyz.xenondevs.nova.util.addToInventoryOrDrop
 import xyz.xenondevs.nova.util.component.adventure.toPlainText
 import xyz.xenondevs.nova.util.item.ItemUtils
 import xyz.xenondevs.nova.util.item.novaItem
 import xyz.xenondevs.nova.util.playClickSound
-import xyz.xenondevs.nova.util.runTaskLater
+import xyz.xenondevs.nova.world.BlockPos
+import xyz.xenondevs.nova.world.block.state.NovaBlockState
+import xyz.xenondevs.nova.world.block.tileentity.NetworkedTileEntity
+import xyz.xenondevs.nova.world.block.tileentity.menu.TileEntityMenuClass
+import xyz.xenondevs.nova.world.block.tileentity.network.type.NetworkConnectionType
+import xyz.xenondevs.nova.world.block.tileentity.network.type.item.inventory.NetworkedInventory
+import xyz.xenondevs.nova.world.item.NovaItem
+import java.util.UUID
+import kotlin.math.min
 
 private val PREVENT_INFINITE_STORAGE by DEEP_STORAGE_UNIT.config.entry<Boolean>("prevent-infinite-storage")
 
-class DeepStorageUnit(blockState: NovaTileEntityState) : NetworkedTileEntity(blockState), StorageCellHolder, SecurityCardHolder {
-    
-    override val cellInventory: VirtualInventory = VirtualInventory(12).apply {
-        maxStackSizes = IntArray(12) { 1 }
-        setPreUpdateHandler(::handleCellUpdate)
-        setPostUpdateHandler(::handlePostCellUpdate)
+private const val BYPASS_PERMISSION = "deep_storage.security.bypass"
+private const val CELL_SLOTS = 12
+private const val CARD_SLOTS = 14
+private const val CONTENT_COLUMNS = 7
+private const val CONTENT_ROWS = 3
+
+/**
+ * How many slots the item network sees. Networks allocate their snapshot arrays once, when they
+ * are built, so this cannot follow the cells that happen to be inserted: it is the type capacity
+ * of a unit filled with the largest cells there are.
+ */
+private val NETWORK_SLOTS: Int by lazy {
+    CELL_SLOTS * Items.STORAGE_CELLS.maxOf { it.getBehaviorOrNull<StorageCell>()!!.itemAmount }
+}
+
+class DeepStorageUnit(pos: BlockPos, blockState: NovaBlockState, data: Compound) :
+    NetworkedTileEntity(pos, blockState, data), StorageCellHolder, SecurityCardHolder {
+
+    // display stacks only; the real cells live in virtualMap and in the persistent compound
+    override val cellInventory: VirtualInventory = VirtualInventory(null, IntArray(CELL_SLOTS) { 1 }).apply {
+        addPreUpdateHandler(::handleCellUpdate)
+        addPostUpdateHandler(::handlePostCellUpdate)
     }
-    override val virtualMap = fromInventory(retrieveData("cells") { VirtualInventory(12) })
-    override val cardInventory = retrieveData<VirtualInventory>("card") {
-        VirtualInventory(IntArray(14) { 1 }) }.apply {
-        setPreUpdateHandler(::handleCardUpdate) }
-    private val inputInv = VoidingVirtualInventory(1).apply { setPreUpdateHandler(::handlePreInput) }
-    private val inventory = DeepStorageInventory(VirtualInventory(getSize()))
-    
-    override val itemHolder = NovaItemHolder(
-        this,
-        uuid to (inventory to NetworkConnectionType.BUFFER)
-    ) { createSideConfig(NetworkConnectionType.BUFFER, BlockSide.FRONT) }
-    
-    private var sortMode by storedValue("sortMode") { SortMode.HIGHER_AMOUNT }
-    
+
+    override val virtualMap: HashMap<Int, VirtualStorageCell> = loadCells()
+
+    override val cardInventory: VirtualInventory = storedInventory(
+        "card", CARD_SLOTS,
+        persistent = true,
+        maxStackSizes = IntArray(CARD_SLOTS) { 1 },
+        preUpdateHandler = ::handleCardUpdate
+    )
+
+    private val inputInventory = VirtualInventory(null, 1).apply {
+        addPreUpdateHandler(::handlePreInput)
+        addPostUpdateHandler(::handlePostInput)
+    }
+
+    private val inventory = DeepStorageInventory()
+
+    override var whiteList: Boolean by storedValue("whitelist") { false }
+    private var sortMode: SortMode by storedValue("sortMode") { SortMode.HIGHER_AMOUNT }
+
     init {
-        inventory.updateInventory()
+        storedItemHolder(inventory to NetworkConnectionType.BUFFER, blockedSides = setOf(BlockSide.FRONT))
         updateCellInv()
     }
-    
-    override var whiteList: Boolean = false
-    
+
     override fun callUpdateCell() {
-        menuContainer.forEachMenu(DeepStorageUnitMenu::update)
+        inventory.rebuildIndex()
+        menuContainer.forEachMenu(DeepStorageUnitMenu::updateContent)
     }
-    
-    override fun canInputCard(player: Player): Boolean {
-        return player.isOp ||
-            player.hasPermission("deep_storage.security.bypass") ||
-            player.uniqueId == ownerUUID
-    }
-    
-    fun hasAccess(player: Player): Boolean {
-        if (canInputCard(player)) return true
-        return hasCardAccess(player)
-    }
-    
-    private fun handlePreInput(event: ItemPreUpdateEvent) {
-        if (event.updateReason == SELF_UPDATE_REASON || event.newItem == null) return
-        val item = event.newItem!!
-        
-        if (PREVENT_INFINITE_STORAGE) {
-            val storageCell = item.novaItem?.getBehaviorOrNull<StorageCell>()
-            if (storageCell != null && !storageCell.isEmpty(item)) {
-                event.isCancelled = true
-                return
+
+    override fun canInputCard(player: Player): Boolean =
+        player.isOp || player.hasPermission(BYPASS_PERMISSION) || player.uniqueId == ownerUuid
+
+    fun hasAccess(player: Player): Boolean =
+        canInputCard(player) || hasCardAccess(player)
+
+    /**
+     * Whether [player] may open or break this unit: everybody while the whitelist is off, otherwise only those with [hasAccess].
+     */
+    fun isAllowed(player: Player): Boolean =
+        !whiteList || hasAccess(player)
+
+    /**
+     * Cells are persisted per slot as the cell's item type plus its contents map. The map stored is
+     * the very object the [VirtualStorageCell] mutates, so Nova serializes the current contents
+     * whenever it saves the compound; nothing has to be written back on each transfer.
+     * Persistent keys travel inside the dropped unit item, as the original addon's did.
+     */
+    private fun loadCells(): HashMap<Int, VirtualStorageCell> {
+        val cells = HashMap<Int, VirtualStorageCell>()
+
+        // layout of the original addon: one inventory of real cell items
+        val legacy = retrieveDataOrNull<VirtualInventory>("cells")
+        if (legacy != null) {
+            removeData("cells")
+            for ((slot, cell) in fromInventory(legacy)) {
+                cells[slot] = cell
+                cellInserted(slot, cell)
             }
+            return cells
         }
-        
-        val rest = inventory.addInventoryItem(item)
-        
-        if (rest == 0) return
-        if (event.updateReason !is PlayerUpdateReason) return
-        val player = (event.updateReason as PlayerUpdateReason).player
-        runTaskLater(1) {player.addToInventoryOrDrop(listOf(item.apply { amount = rest }))}
+
+        for (slot in 0..<CELL_SLOTS) {
+            val type = retrieveDataOrNull<NovaItem>(cellTypeKey(slot)) ?: continue
+            val behavior = type.getBehaviorOrNull<StorageCell>() ?: continue
+            val contents = retrieveDataOrNull<MutableMap<ItemStack, Int>>(cellDataKey(slot)) ?: mutableMapOf()
+
+            val cell = VirtualStorageCell(CellData(behavior.capacity, behavior.itemAmount, contents), type)
+            cells[slot] = cell
+            // re-store so the compound holds this very map instance, not a stale deserialized copy
+            cellInserted(slot, cell)
+        }
+
+        return cells
     }
-    
-    override fun saveData() {
-        super.saveData()
-        storeData("card", cardInventory, true)
-        storeData("cells", toInventory(), true)
+
+    override fun cellInserted(slot: Int, cell: VirtualStorageCell) {
+        storeData(cellTypeKey(slot), cell.novaItem, true)
+        storeData(cellDataKey(slot), cell.cellData.dataMap, true)
     }
-    
+
+    override fun cellRemoved(slot: Int) {
+        removeData(cellTypeKey(slot))
+        removeData(cellDataKey(slot))
+    }
+
+    private fun cellTypeKey(slot: Int): String =
+        "cell_${slot}_type"
+
+    private fun cellDataKey(slot: Int): String =
+        "cell_${slot}_data"
+
+    private fun handlePreInput(event: ItemPreUpdateEvent) {
+        if (event.updateReason == SELF_UPDATE_REASON || !event.isAdd)
+            return
+
+        val item = event.newItem ?: return
+        if (!inventory.accepts(item))
+            event.isCancelled = true
+    }
+
+    private fun handlePostInput(event: ItemPostUpdateEvent) {
+        if (event.updateReason == SELF_UPDATE_REASON)
+            return
+
+        val item = event.newItem ?: return
+        val rest = inventory.insert(item)
+        val leftover = if (rest > 0) item.clone().apply { amount = rest } else null
+        inputInventory.setItem(UpdateReason.SUPPRESSED, 0, leftover)
+    }
+
     enum class SortMode {
         ALPHABETICAL, HIGHER_AMOUNT
     }
-    
+
     @TileEntityMenuClass
-    inner class DeepStorageUnitMenu: GlobalTileEntityMenu() {
-        
-        private val openCellWindow = clickableItem(GuiMaterials.STORAGE_CELL.clientsideProvider) {
-            it.playClickSound()
-            cellWindow.open(it)
-        }
-        
-        private val openCardWindow = clickableItem(GuiMaterials.SECURITY_CARD.clientsideProvider) {
-            if (canInputCard(it)) {
-                it.playClickSound()
-                cardWindow.open(it)
-            }
-        }
-        
-        private val sideConfigGui = SideConfigMenu(
-            this@DeepStorageUnit, listOf(inventory to "inventory.nova.input"), ::openWindow
+    inner class DeepStorageUnitMenu : GlobalTileEntityMenu() {
+
+        private val sideConfigMenu = SideConfigMenu(
+            this@DeepStorageUnit,
+            inventories = mapOf(inventory to "inventory.nova.default"),
+            openPrevious = ::openWindow
         )
-        
-        private val customScroll = CustomScrollGui().apply { setContent(getDisplay()) }
-        
-        override val gui = Gui.normal()
+
+        private val sortButton = SortButton()
+        private val whitelistButton = WhitelistButton()
+
+        override val gui: ScrollGui<Item> = ScrollGui.itemsBuilder()
             .setStructure(
-                "d u # # # # c s #",
-                "- - - - - - - - -",
-                "x x x x x x x x x",
-                "x x x x x x x x x",
-                "x x x x x x x x x",
-                "x x x x x x x x x")
-            .addIngredient('-', inputInv, DefaultGuiItems.LIGHT_HORIZONTAL_LINE.clientsideProvider)
-            .addIngredient('d', openCellWindow)
-            .addIngredient('s', OpenSideConfigItem(sideConfigGui))
-            .addIngredient('u', SortButton())
-            .addIngredient('c', openCardWindow)
-            .addModifier { it.fillRectangle(0, 2, customScroll, true) }
+                "1 - - - - - - - 2",
+                "| i # # k a o s |",
+                "| x x x x x x x u",
+                "| x x x x x x x |",
+                "| x x x x x x x d",
+                "3 - - - - - - - 4")
+            .addIngredient('i', inputInventory)
+            .addIngredient('k', OpenCellsItem())
+            .addIngredient('a', OpenCardsItem())
+            .addIngredient('o', sortButton)
+            .addIngredient('s', OpenSideConfigItem(sideConfigMenu))
+            .setContent(createContent())
             .build()
-        
-        private val cellGui = Gui.normal()
+
+        private val cellGui: Gui = Gui.builder()
             .setStructure(
                 "# # 1 - - - 2 # #",
-                "# # | x x x | # #",
-                "# # | x x x | # #",
-                "# # | x x x | # #",
-                "# # | x x x | # #",
-                "r # 3 - - - 4 # #",)
-            .addIngredient('r', BackItem {openWindow(it)})
-            .addIngredient('x', cellInventory, GuiMaterials.STORAGE_CELL_PLACEHOLDER)
+                "# # | c c c | # #",
+                "# # | c c c | # #",
+                "# # | c c c | # #",
+                "# # | c c c | # #",
+                "b # 3 - - - 4 # #")
+            .addIngredient('c', cellInventory, GuiItems.STORAGE_CELL_PLACEHOLDER.clientsideProvider)
+            .addIngredient('b', BackItem(openPrevious = ::openWindow))
             .build()
-        
-        private val cellWindow = Window.single()
-            .setGui(cellGui)
-            .setTitle(Component.translatable("menu.deep_storage.storage_cell_inventory"))
-        
-        private val cardGui = Gui.normal()
+
+        private val cardGui: Gui = Gui.builder()
             .setStructure(
                 "# # # # # # # # w",
                 "1 - - - - - - - 2",
-                "| x x x x x x x |",
-                "| x x x x x x x |",
+                "| c c c c c c c |",
+                "| c c c c c c c |",
                 "3 - - - - - - - 4",
                 "b # # # # # # # #")
-            .addIngredient('w', WhitelistButton())
-            .addIngredient('b', BackItem {openWindow(it)})
-            .addIngredient('x', cardInventory, GuiMaterials.SECURITY_CARD_PLACEHOLDER)
+            .addIngredient('c', cardInventory, GuiItems.SECURITY_CARD_PLACEHOLDER.clientsideProvider)
+            .addIngredient('w', whitelistButton)
+            .addIngredient('b', BackItem(openPrevious = ::openWindow))
             .build()
-        
-        private val cardWindow = Window.single()
-            .setGui(cardGui)
-            .setTitle(Component.translatable("menu.deep_storage.security_card_inventory"))
-        
-        fun update() {
-            inventory.updateInventory()
-            updateContent()
-        }
-        
-        fun updateContent() {
-            customScroll.setContent(getDisplay())
-        }
-        
-        private fun getDisplay(): List<ItemDisplay> {
-            val list = getItems().entries
-                .map { (item, value) -> ItemDisplay(item, value) }
-            
-            return if (sortMode == SortMode.HIGHER_AMOUNT) list.sortedByDescending { it.amount }
-            else list.sortedBy { it.name() }
-        }
-        
-        inner class WhitelistButton: AbstractItem() {
-            override fun getItemProvider(): ItemProvider {
-                return if (whiteList) GuiMaterials.WHITELIST_ON.clientsideProvider
-                else GuiMaterials.WHITELIST_OFF.clientsideProvider
+
+        override fun openWindow(player: Player) {
+            if (!isAllowed(player)) {
+                player.sendMessage(Component.translatable("message.deep_storage.not_whitelisted", NamedTextColor.DARK_RED))
+                return
             }
-            
-            override fun handleClick(clickType: ClickType, player: Player, event: InventoryClickEvent) {
+
+            super.openWindow(player)
+        }
+
+        fun updateContent() {
+            gui.setContent(createContent())
+        }
+
+        private fun openSubWindow(player: Player, subGui: Gui, title: String) {
+            val window = Window.builder()
+                .setUpperGui(subGui)
+                .setTitle(Component.translatable(title))
+                .build(player)
+
+            menuContainer.registerWindow(window)
+            window.open()
+        }
+
+        /**
+         * The stored items in the chosen order, padded with deposit slots so the visible area is
+         * always filled and there is always an empty row to drop items into.
+         */
+        private fun createContent(): List<Item> {
+            val displays = getItems().entries.map { (item, amount) -> ItemDisplay(item, amount) }
+            val sorted = when (sortMode) {
+                SortMode.HIGHER_AMOUNT -> displays.sortedByDescending { it.amount }
+                SortMode.ALPHABETICAL -> displays.sortedBy { it.name }
+            }
+
+            val rows = maxOf(CONTENT_ROWS, sorted.size / CONTENT_COLUMNS + 1)
+            val padding = rows * CONTENT_COLUMNS - sorted.size
+            return sorted + List(padding) { DepositSlot() }
+        }
+
+        /**
+         * Puts the cursor stack (or one item of it on a right click) into the cells.
+         * Returns false when the cursor was empty, so the caller can treat the click as a withdrawal.
+         */
+        private fun depositCursor(player: Player, clickType: ClickType): Boolean {
+            val cursor = player.itemOnCursor
+            if (cursor.type.isAir)
+                return false
+
+            val portion = if (clickType == ClickType.RIGHT) 1 else cursor.amount
+            val rest = inventory.insert(cursor.clone().apply { amount = portion })
+            val stored = portion - rest
+            if (stored > 0) {
+                val remaining = cursor.amount - stored
+                player.setItemOnCursor(if (remaining > 0) cursor.clone().apply { amount = remaining } else null)
+            }
+
+            return true
+        }
+
+        private inner class OpenCellsItem : AbstractItem() {
+
+            override fun getItemProvider(player: Player): ItemProvider =
+                GuiItems.STORAGE_CELLS_BTN.clientsideProvider
+
+            override fun handleClick(clickType: ClickType, player: Player, click: Click) {
+                player.playClickSound()
+                openSubWindow(player, cellGui, "menu.deep_storage.storage_cell_inventory")
+            }
+
+        }
+
+        private inner class OpenCardsItem : AbstractItem() {
+
+            override fun getItemProvider(player: Player): ItemProvider =
+                GuiItems.SECURITY_CARDS_BTN.clientsideProvider
+
+            override fun handleClick(clickType: ClickType, player: Player, click: Click) {
+                if (!canInputCard(player))
+                    return
+
+                player.playClickSound()
+                openSubWindow(player, cardGui, "menu.deep_storage.security_card_inventory")
+            }
+
+        }
+
+        private inner class WhitelistButton : AbstractItem() {
+
+            override fun getItemProvider(player: Player): ItemProvider =
+                (if (whiteList) GuiItems.WHITELIST_ON_BTN else GuiItems.WHITELIST_OFF_BTN).clientsideProvider
+
+            override fun handleClick(clickType: ClickType, player: Player, click: Click) {
                 player.playClickSound()
                 whiteList = !whiteList
                 notifyWindows()
             }
-            
+
         }
-        
-        inner class SortButton: AbstractItem() {
-            override fun getItemProvider(): ItemProvider {
-                return if (sortMode == SortMode.ALPHABETICAL) GuiMaterials.ALPHABETICAL_SORT.clientsideProvider
-                else GuiMaterials.STACK_SORT.clientsideProvider
-            }
-            
-            override fun handleClick(clickType: ClickType, player: Player, event: InventoryClickEvent) {
+
+        private inner class SortButton : AbstractItem() {
+
+            override fun getItemProvider(player: Player): ItemProvider =
+                (if (sortMode == SortMode.ALPHABETICAL) GuiItems.SORT_ALPHABETICAL_BTN else GuiItems.SORT_STACK_BTN).clientsideProvider
+
+            override fun handleClick(clickType: ClickType, player: Player, click: Click) {
                 player.playClickSound()
                 sortMode = if (sortMode == SortMode.ALPHABETICAL) SortMode.HIGHER_AMOUNT else SortMode.ALPHABETICAL
                 notifyWindows()
                 updateContent()
             }
-            
+
         }
-        
-        inner class ItemDisplay(val item: ItemStack, val amount: Int): AbstractItem() {
-            
-            fun name(): String {
-                return ItemUtils.getName(item).toPlainText()
+
+        /**
+         * An empty content slot: clicking it with something on the cursor stores that.
+         */
+        private inner class DepositSlot : AbstractItem() {
+
+            override fun getItemProvider(player: Player): ItemProvider =
+                ItemProvider.EMPTY
+
+            override fun handleClick(clickType: ClickType, player: Player, click: Click) {
+                depositCursor(player, clickType)
             }
-            
-            override fun getItemProvider(): ItemProvider {
-                val itemBuilder = ItemBuilder(item)
-                
-                val displayName = ItemUtils.getName(item)
-                    .append(Component.text(" x${amount}").color(NamedTextColor.GREEN))
-                
-                itemBuilder.setDisplayName(displayName)
-                return itemBuilder
-            }
-            
-            override fun handleClick(clickType: ClickType, player: Player, event: InventoryClickEvent) {
-                val itemStack = item.clone()
-                itemStack.amount = itemStack.maxStackSize.coerceAtMost(amount)
-                
-                val cursor = player.itemOnCursor
-                if (!cursor.type.isAir) {
-                    if (clickType == ClickType.LEFT) {
-                        val rest = inventory.addInventoryItem(cursor)
-                        cursor.amount = rest
-                    } else if (clickType == ClickType.RIGHT) {
-                        inventory.addInventoryItem(cursor.clone().apply { amount = 1 })
-                        cursor.amount = cursor.amount - 1
-                    }
+
+        }
+
+        private inner class ItemDisplay(val item: ItemStack, val amount: Int) : AbstractItem() {
+
+            val name: String = ItemUtils.getName(item).toPlainText()
+
+            override fun getItemProvider(player: Player): ItemProvider =
+                ItemBuilder(item.clone())
+                    .setName(ItemUtils.getName(item).append(Component.text(" x$amount", NamedTextColor.GREEN)))
+
+            override fun handleClick(clickType: ClickType, player: Player, click: Click) {
+                if (depositCursor(player, clickType))
+                    return
+
+                val available = getItemAmount(item)
+                if (available <= 0) {
+                    updateContent()
                     return
                 }
-                
-                if (clickType == ClickType.LEFT) {
-                    player.setItemOnCursor(itemStack)
-                } else if (clickType == ClickType.SHIFT_LEFT) {
-                    player.addToInventoryOrDrop(listOf(itemStack))
-                } else if (clickType == ClickType.RIGHT) {
-                    
-                    if (cursor.isSimilar(itemStack)) {
-                        if (cursor.amount == cursor.maxStackSize) return
-                        cursor.amount = cursor.maxStackSize.coerceAtMost(cursor.amount + 1)
-                        itemStack.apply { amount = 1 }
-                    } else if (cursor.type.isAir) {
-                        player.setItemOnCursor(itemStack.apply { amount = 1 })
-                    } else return
-                    
-                } else if (clickType == ClickType.SHIFT_RIGHT) {
-                    player.addToInventoryOrDrop(listOf(itemStack.apply { amount = 1 }))
-                } else if (clickType == ClickType.MIDDLE) {
-                    
-                    if (player.gameMode != GameMode.CREATIVE) return
-                    if (!cursor.type.isAir) return
-                    player.setItemOnCursor(itemStack.apply { amount = itemStack.maxStackSize })
-                    return
-                    
-                } else return
-                
-                removeItem(itemStack)
+
+                val stackSize = min(item.maxStackSize, available)
+                when (clickType) {
+                    ClickType.LEFT -> withdraw(stackSize)?.let(player::setItemOnCursor)
+                    ClickType.RIGHT -> withdraw(1)?.let(player::setItemOnCursor)
+                    ClickType.SHIFT_LEFT -> withdraw(stackSize)?.let { player.addToInventoryOrDrop(it) }
+                    ClickType.SHIFT_RIGHT -> withdraw(1)?.let { player.addToInventoryOrDrop(it) }
+                    ClickType.MIDDLE -> {
+                        if (player.gameMode == GameMode.CREATIVE)
+                            player.setItemOnCursor(item.clone().apply { amount = item.maxStackSize })
+                    }
+
+                    else -> Unit
+                }
+            }
+
+            private fun withdraw(count: Int): ItemStack? {
+                val stack = item.clone().apply { amount = count }
+                val rest = removeItem(stack, count)
+                inventory.rebuildIndex()
                 menuContainer.forEachMenu(DeepStorageUnitMenu::updateContent)
+
+                val taken = count - rest
+                if (taken <= 0)
+                    return null
+
+                return stack.apply { amount = taken }
             }
-            
+
         }
-        
-        override fun openWindow(player: Player) {
-            if (!hasAccess(player) && whiteList) {
-                player.sendMessage(
-                    Component.text()
-                    .append(
-                        Component.translatable("message.deep_storage.not_whitelisted")
-                            .color(NamedTextColor.DARK_RED)
-                    ).build()
-                )
-                return
-            }
-            super.openWindow(player)
-        }
+
     }
-    
-    inner class DeepStorageInventory(private val virtualInventory: VirtualInventory) : NetworkedInventory {
-        
+
+    /**
+     * The face the item network sees: one slot per stored item type, in the order the cells hold
+     * them. Networks snapshot the slots with [copyContents] before a tick and address them by index
+     * afterwards, so [take] leaves a hole instead of shifting the slots behind it; the order is
+     * rebuilt on the next snapshot.
+     */
+    inner class DeepStorageInventory : NetworkedInventory {
+
+        override val uuid: UUID = this@DeepStorageUnit.uuid
+
         override val size: Int
-            get() = virtualInventory.size
-        
-        private fun resize() {
-            virtualInventory.resize(getSize())
+            get() = NETWORK_SLOTS
+
+        private val index = ArrayList<ItemStack?>()
+
+        /**
+         * Whether [item] may go into the cells at all: with `prevent-infinite-storage` on, a cell
+         * that holds something cannot be stored inside another cell.
+         */
+        fun accepts(item: ItemStack): Boolean {
+            if (!PREVENT_INFINITE_STORAGE)
+                return true
+
+            val cell = item.novaItem?.getBehaviorOrNull<StorageCell>() ?: return true
+            return cell.isEmpty(item)
         }
-        
-        override val items: Array<ItemStack?>
-            get() = virtualInventory.items
-        
-        override fun setItem(slot: Int, item: ItemStack?): Boolean {
-            val currentStack = virtualInventory.getUnsafeItem(slot)!!
-            if (item == null) {
-                removeItem(currentStack)
-                virtualInventory.setItem(null, slot, null)
-                cleanInventory()
-                menuContainer.forEachMenu(DeepStorageUnitMenu::updateContent)
-            } else {
-                val itemAmount = currentStack.amount - item.amount
-                removeItem(item, itemAmount)
-                virtualInventory.setItem(UpdateReason.SUPPRESSED, slot, item.clone()
-                    .apply{ amount = maxStackSize.coerceAtMost(itemAmount) })
-                menuContainer.forEachMenu(DeepStorageUnitMenu::updateContent)
-            }
-            return true
-        }
-        
-        override fun addItem(item: ItemStack): Int {
-            return addInventoryItem(item)
-        }
-        
-        override fun canDecrementByOne(slot: Int): Boolean {
-            val itemStack = virtualInventory.getUnsafeItem(slot) ?: return false
-            if (getItemAmount(itemStack) == 0) {
-                virtualInventory.setItem(SELF_UPDATE_REASON, slot, null)
-                return false
-            }
-            return true
-        }
-        
-        override fun decrementByOne(slot: Int) {
-            val item = virtualInventory.getItem(slot)
-            if (item != null) {
-                val itemAmount = getItemAmount(item)
-                virtualInventory.setItem(UpdateReason.SUPPRESSED, slot, item.clone()
-                    .apply{ amount = maxStackSize.coerceAtMost(itemAmount - 1) })
-                removeItem(item, 1)
-                menuContainer.forEachMenu(DeepStorageUnitMenu::updateContent)
-            }
-        }
-        
-        override fun isFull(): Boolean {
-            return false
-        }
-        
-        fun updateInventory() {
-            cleanInventory()
-            getItems().entries.mapIndexed { index, entry ->
-                virtualInventory.setItem(SELF_UPDATE_REASON, index,
-                    entry.key.clone().apply { amount = maxStackSize.coerceAtMost(entry.value) })
-            }
-        }
-        
-        private fun cleanInventory() {
-            resize()
-            for (i in 0..< getSize()) {
-                inventory.getItem(i) ?: continue
-                virtualInventory.setItem(null, i, null)
-            }
-        }
-        
-        fun addInventoryItem(item: ItemStack): Int {
-            val itemAmount = getItemAmount(item)
-            val invSlot = getInvSlot(item)
+
+        /**
+         * Stores as much of [item] as fits and returns the amount left over.
+         */
+        fun insert(item: ItemStack): Int {
+            if (!accepts(item))
+                return item.amount
+
             val rest = addItemToCell(item)
-            if (rest == item.amount) return rest
-            if (invSlot == 0) {
-                virtualInventory.addItem(null,
-                    item.clone().apply { this.amount = item.maxStackSize.coerceAtMost(item.amount - rest) })
-            } else {
-                virtualInventory.setItem(null, invSlot,
-                    item.clone().apply { this.amount = itemAmount.coerceAtMost(item.maxStackSize) })
+            if (rest < item.amount) {
+                track(item)
+                menuContainer.forEachMenu(DeepStorageUnitMenu::updateContent)
             }
-            if (rest != item.amount) menuContainer.forEachMenu(DeepStorageUnitMenu::updateContent)
+
             return rest
         }
-        
-        private fun getInvSlot(item: ItemStack): Int {
-            for ((index, items) in virtualInventory.items.withIndex()) {
-                if (items?.isSimilar(item) == false) continue
-                return index
+
+        fun rebuildIndex() {
+            index.clear()
+            for (item in getItems().keys) {
+                if (index.size >= NETWORK_SLOTS)
+                    break
+
+                index += item
             }
-            return 0
         }
-        
-    }
-    
-    inner class CustomScrollGui: AbstractScrollGui<Item>(9, 4, false,
-        Structure(
-            "# x x x x x x x #",
-            "# x x x x x x x u",
-            "# x x x x x x x d",
-            "# x x x x x x x #",
-        )) {
-        
-        override fun bake() {
-            val elements = ArrayList<SlotElement>(content.size)
-            for (item in content) {
-                elements.add(SlotElement.ItemSlotElement(item))
-            }
-            this.elements = elements
-            update()
-        }
-        
-        override fun handleClick(slotNumber: Int, player: Player?, clickType: ClickType?, event: InventoryClickEvent) {
-            if (slotElements[slotNumber] == null) {
-                event.isCancelled = true
-                val cursor = player?.itemOnCursor ?: return
-                if (cursor.type.isAir) return
-                
-                if (clickType == ClickType.LEFT) {
-                    val rest = inventory.addInventoryItem(cursor)
-                    cursor.amount = rest
-                } else if (clickType == ClickType.RIGHT) {
-                    val rest = inventory.addInventoryItem(cursor.clone().apply { amount = 1 })
-                    cursor.amount = cursor.amount - 1
-                }
-                
+
+        private fun track(item: ItemStack) {
+            if (index.any { it != null && it.isSimilar(item) })
                 return
+
+            val key = item.clone().apply { amount = 1 }
+            val hole = index.indexOf(null)
+            if (hole >= 0) {
+                index[hole] = key
+            } else if (index.size < NETWORK_SLOTS) {
+                index += key
             }
-            
-            super.handleClick(slotNumber, player, clickType, event)
         }
-        
+
+        override fun add(itemStack: ItemStack, amount: Int): Int =
+            insert(itemStack.clone().apply { this.amount = amount })
+
+        override fun canTake(slot: Int, amount: Int): Boolean {
+            val item = index.getOrNull(slot) ?: return false
+            return getItemAmount(item) >= amount
+        }
+
+        override fun take(slot: Int, amount: Int) {
+            val item = index.getOrNull(slot) ?: return
+            removeItem(item, amount)
+            if (getItemAmount(item) == 0)
+                index[slot] = null
+
+            menuContainer.forEachMenu(DeepStorageUnitMenu::updateContent)
+        }
+
+        override fun isFull(): Boolean =
+            virtualMap.values.all { it.cellData.getStoredBytesAmount() >= it.cellData.capacity }
+
+        override fun isEmpty(): Boolean =
+            index.all { it == null }
+
+        override fun copyContents(destination: Array<ItemStack>) {
+            val items = getItems()
+            index.clear()
+            for (item in items.keys) {
+                if (index.size >= NETWORK_SLOTS)
+                    break
+
+                index += item
+            }
+
+            for (slot in destination.indices) {
+                val item = index.getOrNull(slot)
+                destination[slot] = if (item == null) {
+                    ItemStack.empty()
+                } else {
+                    item.clone().apply { amount = min(item.maxStackSize, items[item] ?: 0) }
+                }
+            }
+        }
+
     }
-    
+
 }

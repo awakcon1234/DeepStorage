@@ -1,6 +1,5 @@
 {
   "menu.deep_storage.items.alphabetical_sort": "Sort Inventory By Names",
-  "menu.deep_storage.items.category.deep_storage": "Deep Storage",
   "menu.deep_storage.items.security_card": "Security Card Inventory",
   "menu.deep_storage.items.stack_sort": "Sort Inventory By Higher Stack",
   "menu.deep_storage.items.storage_cell": "Storage Cell Inventory",

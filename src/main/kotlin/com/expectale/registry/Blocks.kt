@@ -3,22 +3,31 @@ package com.expectale.registry
 import com.expectale.DeepStorage
 import com.expectale.tileentity.DeepStorageUnit
 import org.bukkit.Material
-import xyz.xenondevs.nova.addon.registry.BlockRegistry
-import xyz.xenondevs.nova.data.world.block.property.Directional
 import xyz.xenondevs.nova.initialize.Init
 import xyz.xenondevs.nova.initialize.InitStage
-import xyz.xenondevs.nova.item.options.BlockOptions
-import xyz.xenondevs.nova.item.tool.VanillaToolCategories
-import xyz.xenondevs.nova.item.tool.VanillaToolTiers
+import xyz.xenondevs.nova.resources.builder.layout.block.BackingStateCategory
+import xyz.xenondevs.nova.world.block.NovaTileEntityBlock
+import xyz.xenondevs.nova.world.block.behavior.BlockSounds
+import xyz.xenondevs.nova.world.block.behavior.Breakable
+import xyz.xenondevs.nova.world.block.behavior.TileEntityDrops
+import xyz.xenondevs.nova.world.block.behavior.TileEntityInteractive
+import xyz.xenondevs.nova.world.block.behavior.TileEntityLimited
 import xyz.xenondevs.nova.world.block.sound.SoundGroup
+import xyz.xenondevs.nova.world.block.state.property.DefaultScopedBlockStateProperties.FACING_HORIZONTAL
+import xyz.xenondevs.nova.world.item.tool.VanillaToolCategories
+import xyz.xenondevs.nova.world.item.tool.VanillaToolTiers
 
 @Init(stage = InitStage.PRE_PACK)
-object Blocks : BlockRegistry by DeepStorage.registry {
-    
-    private val DEEP_STORAGE_UNIT_BLOCK_OPTION = BlockOptions(3.0, VanillaToolCategories.PICKAXE, VanillaToolTiers.IRON,
-        false, SoundGroup.STONE, Material.STONE)
-    
-    val DEEP_STORAGE_UNIT = tileEntity("deep_storage_unit", ::DeepStorageUnit)
-        .blockOptions(DEEP_STORAGE_UNIT_BLOCK_OPTION).properties(Directional.NORMAL).register()
-    
+object Blocks {
+
+    private val STONE = Breakable(3.0, setOf(VanillaToolCategories.PICKAXE), VanillaToolTiers.IRON, false, Material.STONE)
+
+    val DEEP_STORAGE_UNIT: NovaTileEntityBlock = DeepStorage.tileEntity("deep_storage_unit", ::DeepStorageUnit) {
+        behaviors(STONE, BlockSounds(SoundGroup.STONE), TileEntityLimited, TileEntityDrops, TileEntityInteractive)
+        stateProperties(FACING_HORIZONTAL)
+        stateBacked(BackingStateCategory.NOTE_BLOCK, BackingStateCategory.MUSHROOM_BLOCK) {
+            defaultModel.rotated()
+        }
+    }
+
 }

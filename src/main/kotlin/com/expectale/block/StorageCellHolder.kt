@@ -7,137 +7,158 @@ import xyz.xenondevs.invui.inventory.VirtualInventory
 import xyz.xenondevs.invui.inventory.event.ItemPostUpdateEvent
 import xyz.xenondevs.invui.inventory.event.ItemPreUpdateEvent
 import xyz.xenondevs.invui.inventory.event.PlayerUpdateReason
-import xyz.xenondevs.invui.inventory.get
-import xyz.xenondevs.nova.tileentity.TileEntity
-import xyz.xenondevs.nova.util.VoidingVirtualInventory
 import xyz.xenondevs.nova.util.addToInventoryOrDrop
 import xyz.xenondevs.nova.util.item.novaItem
+import xyz.xenondevs.nova.world.block.tileentity.TileEntity
 
+/**
+ * Owns the storage cells of a unit. [cellInventory] only ever holds client-side display stacks:
+ * a cell dropped into it is converted into a [VirtualStorageCell] in [virtualMap] right away, and
+ * taking a display stack out hands the player the real cell rebuilt from that map.
+ */
 interface StorageCellHolder {
-    
+
     val cellInventory: VirtualInventory
-    
+
     val virtualMap: HashMap<Int, VirtualStorageCell>
-    
+
     /**
-     * Function called when the [StorageCell] are updated.
+     * Called after the set of cells changed.
      */
     fun callUpdateCell()
-    
+
     /**
-     * How many slots the inventory has.
+     * Called when [cell] was put into [slot], so the holder can persist it.
      */
-    fun getSize(): Int {
-        return virtualMap.values.sumOf { virtualStorage -> virtualStorage.cellData.itemAmount }
-    }
-    
+    fun cellInserted(slot: Int, cell: VirtualStorageCell)
+
     /**
-     * [Map] of all items from all [StorageCell] with their amount.
+     * Called when the cell in [slot] was taken out, so the holder can forget it.
+     */
+    fun cellRemoved(slot: Int)
+
+    /**
+     * How many distinct item types all cells can hold together.
+     */
+    fun getSize(): Int =
+        virtualMap.values.sumOf { it.cellData.itemAmount }
+
+    /**
+     * Every stored item with its total amount across all cells, in a stable order.
      */
     fun getItems(): Map<ItemStack, Int> {
-        return mutableMapOf<ItemStack, Int>().apply {
-            virtualMap.values.forEach {
-                putAll(it.cellData.getItems())
+        val merged = LinkedHashMap<ItemStack, Int>()
+        for (slot in cellSlots()) {
+            val cell = virtualMap[slot] ?: continue
+            for ((item, amount) in cell.getItems()) {
+                merged.merge(item, amount, Int::plus)
             }
         }
+        return merged
     }
-    
+
     /**
-     * Amount of specified [ItemStack] left on all [StorageCell].
+     * How many of [item] are stored across all cells.
      */
-    fun getItemAmount(item: ItemStack): Int {
-        return virtualMap.values.sumOf { entry ->
-            entry.cellData.getItems().filter { it.key.isSimilar(item) }.values.sum()
-        }
-    }
-    
+    fun getItemAmount(item: ItemStack): Int =
+        virtualMap.values.sumOf { it.cellData.get(item) }
+
     /**
-     * Add [ItemStack] in [StorageCell] that has space for.
-     * Return the amount of item that can't be stored.
+     * Adds [item] to the first cells with room for it and returns the amount that did not fit.
      */
-    fun addItemToCell(item: ItemStack, update: Boolean = true): Int {
-        var remainingAmount = item.amount
-        virtualMap.values.forEachIndexed { index, entry ->
-            remainingAmount = entry.add(item, remainingAmount)
-            updateCell(index)
-            if (remainingAmount == 0) return 0
+    fun addItemToCell(item: ItemStack): Int {
+        var remaining = item.amount
+        for (slot in cellSlots()) {
+            if (remaining == 0)
+                break
+
+            val cell = virtualMap[slot] ?: continue
+            val before = remaining
+            remaining = cell.add(item, remaining)
+            if (remaining != before)
+                updateCell(slot)
         }
-        return remainingAmount
+        return remaining
     }
-    
-    
+
     /**
-     * Remove [ItemStack] from [StorageCell] that has it.
-     * Return the amount of item that can't be removed.
+     * Removes [amount] of [item] from the cells holding it and returns the amount that could not be removed.
      */
-    fun removeItem(item: ItemStack, amount: Int = item.amount, update: Boolean = true): Int {
-        var remainingAmount = amount
-        virtualMap.values.forEachIndexed { index, entry ->
-            remainingAmount = entry.remove(item, remainingAmount)
-            updateCell(index)
-            if (remainingAmount == 0) return 0
+    fun removeItem(item: ItemStack, amount: Int = item.amount): Int {
+        var remaining = amount
+        for (slot in cellSlots()) {
+            if (remaining == 0)
+                break
+
+            val cell = virtualMap[slot] ?: continue
+            val before = remaining
+            remaining = cell.remove(item, remaining)
+            if (remaining != before)
+                updateCell(slot)
         }
-        return remainingAmount
+        return remaining
     }
-    
-    //TODO Change save method (hotfix)
-    fun toInventory(): VirtualInventory {
-        val virtualInventory = VirtualInventory(12)
-        virtualMap.entries.forEach { (key, value) ->
-            virtualInventory.setItem(TileEntity.SELF_UPDATE_REASON, key, value.toItem())
-        }
-        
-        return virtualInventory
-    }
-    
-    fun fromInventory(virtualInventory: VirtualInventory): HashMap<Int, VirtualStorageCell> {
+
+    /**
+     * Reads cells out of an inventory of real cell items, the layout the original addon persisted.
+     */
+    fun fromInventory(inventory: VirtualInventory): HashMap<Int, VirtualStorageCell> {
         val map = HashMap<Int, VirtualStorageCell>()
-        for (i in 0..< virtualInventory.size) {
-            val itemStack = virtualInventory[i] ?: continue
-            val toVirtual = itemStack.novaItem?.getBehaviorOrNull<StorageCell>()?.toVirtual(itemStack) ?: continue
-            map[i] = toVirtual
+        for (slot in 0..<inventory.size) {
+            val itemStack = inventory.getItem(slot) ?: continue
+            val cell = itemStack.novaItem?.getBehaviorOrNull<StorageCell>()?.toVirtual(itemStack) ?: continue
+            map[slot] = cell
         }
         return map
     }
-    
+
     fun updateCell(slot: Int) {
-        cellInventory.setItem(TileEntity.SELF_UPDATE_REASON, slot,
-            if (virtualMap.containsKey(slot)) virtualMap[slot]!!.toDisplay().get() else null)
+        cellInventory.setItem(TileEntity.SELF_UPDATE_REASON, slot, virtualMap[slot]?.toDisplay()?.get())
     }
-    
+
     fun updateCellInv() {
-        for (i in 0..< cellInventory.size) updateCell(i)
-        cellInventory.notifyWindows()
+        for (slot in cellSlots()) {
+            updateCell(slot)
+        }
         callUpdateCell()
     }
-    
+
     fun handleCellUpdate(event: ItemPreUpdateEvent) {
-        if (event.updateReason == TileEntity.SELF_UPDATE_REASON || (event.newItem == null && event.previousItem == null)) return
-        
-        if (event.isAdd) {
-            event.isCancelled = event.newItem?.novaItem?.getBehaviorOrNull<StorageCell>() == null
-        } else if (event.isRemove) {
-            event.isCancelled = true
-            if (!virtualMap.containsKey(event.slot)) return
-            if (event.updateReason is PlayerUpdateReason) {
-                val player = (event.updateReason as PlayerUpdateReason).player
-                player.addToInventoryOrDrop(listOf(virtualMap.remove(event.slot)!!.toItem()))
+        if (event.updateReason == TileEntity.SELF_UPDATE_REASON)
+            return
+        if (event.newItem == null && event.previousItem == null)
+            return
+
+        when {
+            event.isAdd -> {
+                event.isCancelled = event.newItem?.novaItem?.getBehaviorOrNull<StorageCell>() == null
             }
-            updateCellInv()
-        } else if (event.isSwap) {
-            event.isCancelled = true
+
+            event.isRemove -> {
+                // the display stack never leaves; the player gets the real cell instead
+                event.isCancelled = true
+                val cell = virtualMap.remove(event.slot) ?: return
+                cellRemoved(event.slot)
+                (event.updateReason as? PlayerUpdateReason)?.player()?.addToInventoryOrDrop(cell.toItem())
+                updateCellInv()
+            }
+
+            else -> event.isCancelled = true
         }
     }
-    
+
     fun handlePostCellUpdate(event: ItemPostUpdateEvent) {
-        if (event.updateReason == TileEntity.SELF_UPDATE_REASON || event.newItem == null) return
-        if (event.isAdd) {
-            val stack = event.newItem
-            val storageCell = stack?.novaItem?.getBehaviorOrNull<StorageCell>() ?: return
-            virtualMap[event.slot] = storageCell.toVirtual(stack)
-            stack.amount = 0
-            updateCellInv()
-        }
+        if (event.updateReason == TileEntity.SELF_UPDATE_REASON || !event.isAdd)
+            return
+
+        val stack = event.newItem ?: return
+        val cell = stack.novaItem?.getBehaviorOrNull<StorageCell>()?.toVirtual(stack) ?: return
+        virtualMap[event.slot] = cell
+        cellInserted(event.slot, cell)
+        updateCellInv()
     }
-    
+
+    private fun cellSlots(): IntRange =
+        0..<cellInventory.size
+
 }

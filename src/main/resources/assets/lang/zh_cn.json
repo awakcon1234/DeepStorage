@@ -1,6 +1,5 @@
 {
     "menu.deep_storage.items.alphabetical_sort": "按名称排序",
-    "menu.deep_storage.items.category.deep_storage": "深入存储",
     "menu.deep_storage.items.security_card": "权限卡配置",
     "menu.deep_storage.items.stack_sort": "按数量排序",
     "menu.deep_storage.items.storage_cell": "存储单元配置",

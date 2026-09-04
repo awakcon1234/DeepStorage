@@ -1,0 +1,29 @@
+{
+  "menu.deep_storage.items.alphabetical_sort": "Sắp xếp theo tên",
+  "menu.deep_storage.items.security_card": "Kho thẻ bảo mật",
+  "menu.deep_storage.items.stack_sort": "Sắp xếp theo số lượng",
+  "menu.deep_storage.items.storage_cell": "Kho ô lưu trữ",
+  "menu.deep_storage.items.whitelist_off": "Danh sách trắng: Tắt",
+  "menu.deep_storage.items.whitelist_on": "Danh sách trắng: Bật",
+  "menu.deep_storage.security_card_inventory": "Kho thẻ bảo mật",
+  "menu.deep_storage.storage_cell_inventory": "Kho ô lưu trữ",
+
+  "item.deep_storage.cell_component_16k": "Linh kiện ô 16k",
+  "item.deep_storage.cell_component_1k": "Linh kiện ô 1k",
+  "item.deep_storage.cell_component_4k": "Linh kiện ô 4k",
+  "item.deep_storage.cell_component_64k": "Linh kiện ô 64k",
+  "item.deep_storage.empty_security_card": "Thẻ bảo mật trống",
+  "item.deep_storage.empty_security_card.lore": "Shift + chuột phải để đặt chủ sở hữu",
+  "item.deep_storage.security_card": "Thẻ bảo mật: %s",
+  "item.deep_storage.security_card.lore": "Shift + chuột phải để xoá",
+  "item.deep_storage.storage_cell.bytes": "Đã dùng %s / %s byte",
+  "item.deep_storage.storage_cell.types": "Đã dùng %s / %s loại vật phẩm",
+  "item.deep_storage.storage_cell_16k": "Ô lưu trữ 16k",
+  "item.deep_storage.storage_cell_1k": "Ô lưu trữ 1k",
+  "item.deep_storage.storage_cell_4k": "Ô lưu trữ 4k",
+  "item.deep_storage.storage_cell_64k": "Ô lưu trữ 64k",
+
+  "block.deep_storage.deep_storage_unit": "Kho lưu trữ sâu",
+
+  "message.deep_storage.not_whitelisted": "Bạn không có trong danh sách trắng"
+}

@@ -6,26 +6,33 @@ import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.entity.Player
 import org.bukkit.event.block.Action
 import org.bukkit.inventory.ItemStack
-import xyz.xenondevs.nova.data.serialization.cbf.NamespacedCompound
-import xyz.xenondevs.nova.item.behavior.ItemBehavior
-import xyz.xenondevs.nova.item.logic.PacketItemData
-import xyz.xenondevs.nova.player.WrappedPlayerInteractEvent
 import xyz.xenondevs.nova.util.addToInventoryOrDrop
+import xyz.xenondevs.nova.util.component.adventure.withoutPreFormatting
+import xyz.xenondevs.nova.world.item.behavior.ItemBehavior
+import xyz.xenondevs.nova.world.player.WrappedPlayerInteractEvent
 
-object EmptySecurityCard: ItemBehavior {
-    
+/**
+ * A card without an owner. Shift right-clicking it turns it into a [SecurityCard] owned by the clicker.
+ */
+object EmptySecurityCard : ItemBehavior {
+
     override fun handleInteract(player: Player, itemStack: ItemStack, action: Action, wrappedEvent: WrappedPlayerInteractEvent) {
-        if (!player.isSneaking) return
+        if (!player.isSneaking || !action.isRightClick || wrappedEvent.actionPerformed)
+            return
+
+        wrappedEvent.actionPerformed = true
         itemStack.subtract()
-        val novaCard = Items.SECURITY_CARD
-        val card = novaCard.createItemStack()
-        novaCard.getBehaviorOrNull<SecurityCard>()?.apply { setOwner(card, player) }
-        player.addToInventoryOrDrop(listOf(card))
+
+        val card = Items.SECURITY_CARD.createItemStack()
+        Items.SECURITY_CARD.getBehaviorOrNull<SecurityCard>()?.setOwner(card, player)
+        player.addToInventoryOrDrop(card)
     }
-    
-    override fun updatePacketItemData(data: NamespacedCompound, itemData: PacketItemData) {
-        itemData.addLore(Component.text()
-            .append(Component.translatable("item.deep_storage.empty_security_card.lore").color(NamedTextColor.GRAY))
-            .build())
+
+    override fun modifyClientSideStack(player: Player?, server: ItemStack, client: ItemStack): ItemStack {
+        val lore = client.lore() ?: mutableListOf()
+        lore += Component.translatable("item.deep_storage.empty_security_card.lore", NamedTextColor.GRAY).withoutPreFormatting()
+        client.lore(lore)
+        return client
     }
+
 }
